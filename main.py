@@ -1,6 +1,6 @@
 import pandas as pd
 
-file_path = 'EURUSD_M5.csv'
+file_path = 'EURUSD_M5_3.csv'
 
 columns_to_drop = ['<TICKVOL>', '<VOL>', '<SPREAD>']
 
@@ -8,7 +8,13 @@ columns_to_drop = ['<TICKVOL>', '<VOL>', '<SPREAD>']
 operations = []
 # Lista para gerenciar a posição aberta
 positions = []
+POINT_VALUE = 0.00001
 
+
+# Parametros de configuracao
+mm200Apoio = 0
+
+df_result = pd.DataFrame()
 
 def load_data(file_path):
     """
@@ -49,6 +55,47 @@ def calculate_moving_averages(df, windows):
         return None
 
 
+def AnaliseResultados(df):
+    """
+    Analisa os resultados das operações e calcula o lucro/prejuízo.
+    """
+    global valorFinanceiro, operation, gains
+    operation = 0
+    gains = 0
+    valorFinanceiro = 0
+
+    if df is None or df.empty:
+        print("DataFrame está vazio ou nulo.")
+        return
+
+    if 'Lucro/Prejuizo' not in df.columns:
+        print("A coluna 'Lucro/Prejuizo' não foi encontrada no DataFrame.")
+        return
+
+    # Itera sobre o DataFrame, que agora contém apenas operações de fechamento.
+    for index, row in df.iterrows():
+        # Verifique se a linha é um fechamento de operação
+        if 'Fechamento' in row['Tipo']:
+
+            # Adiciona o valor do lucro/prejuízo total
+            valorFinanceiro += row['Resultado $$']
+            operation += 1
+
+            # Se for um ganho, incrementa a contagem de ganhos
+            if row['Lucro/Prejuizo'] > 0:
+                gains += 1
+
+    # Imprime o relatório final apenas se houverem operações
+    if operation > 0:
+        print("\n--- Relatório Final ---")
+        print(f"Lucro/Prejuízo Líquido: {valorFinanceiro:.5f}")
+        print(f"Total de Operações: {operation}")
+        print(f"Operações com Ganho: {gains}")
+        print(f"Operações com Perda: {operation - gains}")
+        print(f"Porcentagem de Acerto: {gains / operation * 100:.2f}%")
+    else:
+        print("Nenhuma operação de fechamento foi encontrada no DataFrame.")
+
 def main():
     df = load_data(file_path)
 
@@ -57,13 +104,22 @@ def main():
         df = calculate_moving_averages(df, ma_windows)
 
         if df is not None:
-            print(df.tail())
+            # print(df.tail())
             df = ATR(df)
             posicao(df)
-            print("Moving averages calculated successfully.")
-            print("Positions:", positions)
-            print("Results:", operations)
+            # Convert operations to DataFrame for better visualization
+            df_result = pd.DataFrame(operations)
 
+            # calculo de lucro/prejuizo financeiro
+            df_result['Resultado $$'] = df_result.apply(
+                lambda row: (row['Lucro/Prejuizo']/ POINT_VALUE) if 'Lucro/Prejuizo' in row else 0, axis=1
+            )
+            AnaliseResultados(df_result)
+            # print("Moving averages calculated successfully.")
+            # print("Positions:", positions)
+            # print("Results:", operations)
+            # print("Final Results DataFrame:")
+            print(df_result)
         else:
             print("Failed to calculate moving averages.")
     else:
@@ -72,69 +128,132 @@ def main():
 
 def posicao(df):
     """
-    Placeholder for position management logic.
+    Função atualizada com a correção da MA200, adição de Take-Profit e simulação de Spread.
     """
     global positions, operations
 
+    # Definir o spread em pips. Use um valor realista para o seu ativo.
+    spread = 0.00010
+
+    # Múltiplo do ATR para o Take-Profit.
+    take_profit_multiple = 2
+
     for i in range(1, len(df)):
 
-        # Condição de entrada
-        if not positions:
-            # Cruzamento de Compra: MA20 > MA50
-            if df['MA20'].iloc[i - 1] < df['MA50'].iloc[i - 1] and df['MA20'].iloc[i] > df['MA50'].iloc[i]:
+        # Ignorar as primeiras barras onde o ATR não está disponível
+        if pd.isna(df['ATR'].iloc[i]):
+            continue
 
-                # Condição da MA200 (se MA200 existir e tiver valor válido)
-                if 'MA200' in df.columns and df['MA200'].iloc[i] > 0:
+        # Lógica de Entrada (se não houver posição aberta)
+        if not positions:
+
+            # Condições de Compra
+            if (df['MA20'].iloc[i - 1] < df['MA50'].iloc[i - 1] and
+                    df['MA20'].iloc[i] > df['MA50'].iloc[i]):
+                if mm200Apoio == 1:
+                    # Check MA200 para tendência de alta
+                    if 'MA200' in df.columns and df['MA200'].iloc[i] > df['MA200'].iloc[i - 1]:
+                        positions.append('Compra')
+
+                        # Simular entrada com o spread
+                        entry_price = df['<CLOSE>'].iloc[i] + spread
+                        take_profit_level = entry_price + (df['ATR'].iloc[i] * take_profit_multiple)
+
+                        operations.append({
+                            'Tipo': 'Compra',
+                            'Data': df['<DATE>'].iloc[i],
+                            'Preco': entry_price,
+                            'ATR_na_Entrada': df['ATR'].iloc[i],
+                            'Take_Profit_Level': take_profit_level
+                        })
+                        # print(f"Compra em {entry_price:.5f} na Data {df['<DATE>'].iloc[i].date()}")
+                else :
                     positions.append('Compra')
+
+                    # Simular entrada com o spread
+                    entry_price = df['<CLOSE>'].iloc[i] + spread
+                    take_profit_level = entry_price + (df['ATR'].iloc[i] * take_profit_multiple)
+
                     operations.append({
                         'Tipo': 'Compra',
                         'Data': df['<DATE>'].iloc[i],
-                        'Preco': df['<CLOSE>'].iloc[i]
+                        'Preco': entry_price,
+                        'ATR_na_Entrada': df['ATR'].iloc[i],
+                        'Take_Profit_Level': take_profit_level
                     })
-                    print(f"Compra em {df['<CLOSE>'].iloc[i]} na Data {df['<DATE>'].iloc[i].date()}")
+                    # print(f"Compra em {entry_price:.5f} na Data {df['<DATE>'].iloc[i].date()}")
 
-            # Cruzamento de Venda: MA20 < MA50
-            elif df['MA20'].iloc[i - 1] > df['MA50'].iloc[i - 1] and df['MA20'].iloc[i] < df['MA50'].iloc[i]:
 
-                # Condição da MA200 (se MA200 existir e tiver valor válido)
-                if 'MA200' in df.columns and df['MA200'].iloc[i] > 0:
+            # Condições de Venda
+            elif (df['MA20'].iloc[i - 1] > df['MA50'].iloc[i - 1] and
+                  df['MA20'].iloc[i] < df['MA50'].iloc[i]):
+                if mm200Apoio == 1:
+                    # Check MA200 para tendência de baixa
+                    if 'MA200' in df.columns and df['MA200'].iloc[i] < df['MA200'].iloc[i - 1]:
+                        positions.append('Venda')
+
+                        # Simular entrada com o spread
+                        entry_price = df['<CLOSE>'].iloc[i] - spread
+                        take_profit_level = entry_price - (df['ATR'].iloc[i] * take_profit_multiple)
+
+                        operations.append({
+                            'Tipo': 'Venda',
+                            'Data': df['<DATE>'].iloc[i],
+                            'Preco': entry_price,
+                            'ATR_na_Entrada': df['ATR'].iloc[i],
+                            'Take_Profit_Level': take_profit_level
+                        })
+                        # print(f"Venda em {entry_price:.5f} na Data {df['<DATE>'].iloc[i].date()}")
+                else:
                     positions.append('Venda')
+
+                    # Simular entrada com o spread
+                    entry_price = df['<CLOSE>'].iloc[i] - spread
+                    take_profit_level = entry_price - (df['ATR'].iloc[i] * take_profit_multiple)
+
                     operations.append({
                         'Tipo': 'Venda',
                         'Data': df['<DATE>'].iloc[i],
-                        'Preco': df['<CLOSE>'].iloc[i]
+                        'Preco': entry_price,
+                        'ATR_na_Entrada': df['ATR'].iloc[i],
+                        'Take_Profit_Level': take_profit_level
                     })
-                    print(f"Venda em {df['<CLOSE>'].iloc[i]} na Data {df['<DATE>'].iloc[i].date()}")
+                    # print(f"Venda em {entry_price:.5f} na Data {df['<DATE>'].iloc[i].date()}")
 
-        # Condição de saída (se já houver uma posição aberta)
+        # Lógica de Saída (se houver uma posição aberta)
         else:
             last_op = operations[-1]
+            current_close = df['<CLOSE>'].iloc[i]
 
+            # Fechar Compra
             if last_op['Tipo'] == 'Compra':
-                # Fechar Compra por ATR
-                # Condição: Preço de fechamento atual < (Preço de compra - ATR)
-                if df['<CLOSE>'].iloc[i] < (last_op['Preco'] - df['ATR'].iloc[i]):
+                # Condição para Stop-Loss ou Take-Profit
+                stop_loss_level = last_op['Preco'] - last_op['ATR_na_Entrada']
+
+                if current_close < stop_loss_level or current_close >= last_op['Take_Profit_Level']:
                     positions.pop()
                     operations.append({
                         'Tipo': 'Fechamento Compra',
                         'Data': df['<DATE>'].iloc[i],
-                        'Preco': df['<CLOSE>'].iloc[i],
-                        'Lucro/Prejuizo': df['<CLOSE>'].iloc[i] - last_op['Preco']
+                        'Preco': current_close,
+                        'Lucro/Prejuizo': current_close - last_op['Preco']
                     })
-                    print(f"Fechar Compra em {df['<CLOSE>'].iloc[i]} na Data {df['<DATE>'].iloc[i].date()}")
+                    # print(f"Fechamento Compra em {current_close:.5f} na Data {df['<DATE>'].iloc[i].date()}")
 
+            # Fechar Venda
             elif last_op['Tipo'] == 'Venda':
-                # Fechar Venda por ATR
-                # Condição: Preço de fechamento atual > (Preço de venda + ATR)
-                if df['<CLOSE>'].iloc[i] > (last_op['Preco'] + df['ATR'].iloc[i]):
+                # Condição para Stop-Loss ou Take-Profit
+                stop_loss_level = last_op['Preco'] + last_op['ATR_na_Entrada']
+
+                if current_close > stop_loss_level or current_close <= last_op['Take_Profit_Level']:
                     positions.pop()
                     operations.append({
                         'Tipo': 'Fechamento Venda',
                         'Data': df['<DATE>'].iloc[i],
-                        'Preco': df['<CLOSE>'].iloc[i],
-                        'Lucro/Prejuizo': last_op['Preco'] - df['<CLOSE>'].iloc[i]
+                        'Preco': current_close,
+                        'Lucro/Prejuizo': last_op['Preco'] - current_close
                     })
-                    print(f"Fechar Venda em {df['<CLOSE>'].iloc[i]} na Data {df['<DATE>'].iloc[i].date()}")
+                    # print(f"Fechamento Venda em {current_close:.5f} na Data {df['<DATE>'].iloc[i].date()}")
 
 
 
